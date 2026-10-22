@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Module 4 Mock Exam</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="wrap">
+  <nav class="nav"><a href="index.html">← Home</a><a href="must-reads.html">Must reads</a></nav>
+  <h1 id="title">Mock exam</h1>
+  <p class="sub">30 objective (+4 / −1, multi-select scores only if every correct option is ticked) · 2 subjective (15 each) · 150 marks · 90 minutes</p>
+
+  <div id="start" class="facts">
+    Options are shuffled each time, so a retake isn't just memorising positions. Answers are kept in this browser if you reload.
+    <div style="margin-top:12px"><button class="btn" id="startBtn">Start the 90-minute timer</button></div>
+  </div>
+
+  <div id="exam" class="hidden">
+    <div class="bar">
+      <span>Answered: <strong id="count">0</strong> / 30</span>
+      <span class="timer" id="timer">90:00</span>
+      <button class="btn" id="submitBtn">Submit</button>
+    </div>
+    <h2>Part A: objective</h2>
+    <div id="mcq"></div>
+    <h2>Part B: subjective</h2>
+    <p class="sub">Write your answer, then submit. After submitting, compare yours with the model answer and give yourself marks against the rubric.</p>
+    <div id="subj"></div>
+  </div>
+
+  <div id="result" class="hidden"></div>
+</main>
+
+<script src="questions.js"></script>
+<script>
+(function () {
+  const id = new URLSearchParams(location.search).get('id') || '1';
+  const exam = EXAMS[id];
+  if (!exam) { document.getElementById('title').textContent = 'Mock not found'; return; }
+  document.getElementById('title').textContent = exam.title;
+  document.title = exam.title;
+
+  const KEY = 'm4-mock-' + id;
+  const store = {
+    get() { try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch (e) { return null; } },
+    set(v) { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch (e) {} },
+    clear() { try { localStorage.removeItem(KEY); } catch (e) {} }
+  };
+
+  // State: per-question shuffled order, chosen answers, subjective text, deadline.
+  let state = store.get();
+  function freshState() {
+    return {
+      order: exam.mcq.map(q => shuffle(q.options.map((_, i) => i))),
+      chosen: exam.mcq.map(() => []),
+      text: exam.subjective.map(() => ''),
+      deadline: null,
+      submitted: false
+    };
+  }
+  if (!state || state.order.length !== exam.mcq.length) state = freshState();
+
+  function shuffle(a) {
+    for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+    return a;
+  }
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function render() {
+    const mcqEl = document.getElementById('mcq');
+    mcqEl.innerHTML = exam.mcq.map((q, qi) => {
+      const multi = q.type === 'multi';
+      const opts = state.order[qi].map(oi => {
+        const checked = state.chosen[qi].includes(oi) ? 'checked' : '';
+        return `<label class="opt" data-q="${qi}" data-o="${oi}">
+          <input type="${multi ? 'checkbox' : 'radio'}" name="q${qi}" value="${oi}" ${checked}>
+          <span>${esc(q.options[oi])}</span></label>`;
+      }).join('');
+      return `<div class="q" id="q${qi}"><div class="num">Question ${qi + 1}${multi ? ' · select all that apply' : ''}</div>
+        <div class="text">${esc(q.q)}</div>${opts}<div class="fb"></div></div>`;
+    }).join('');
+
+    document.getElementById('subj').innerHTML = exam.subjective.map((s, si) => `
+      <div class="q"><div class="num">Question ${31 + si} · 15 marks</div>
+        <div class="text">${esc(s.q)}</div>
+        <ul class="tasks">${s.tasks.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
+        <textarea data-s="${si}" placeholder="Write your answer under each task heading…">${esc(state.text[si])}</textarea>
+        <div class="sfb"></div></div>`).join('');
+
+    mcqEl.addEventListener('change', e => {
+      const inp = e.target; if (!inp.name) return;
+      const qi = +inp.name.slice(1);
+      state.chosen[qi] = [...document.querySelectorAll(`input[name="q${qi}"]:checked`)].map(x => +x.value);
+      store.set(state); updateCount();
+    });
+    document.getElementById('subj').addEventListener('input', e => {
+      if (e.target.dataset.s === undefined) return;
+      state.text[+e.target.dataset.s] = e.target.value; store.set(state);
+    });
+    updateCount();
+  }
+
+  function updateCount() {
+    document.getElementById('count').textContent = state.chosen.filter(c => c.length).length;
+  }
+
+  let tick;
+  function startTimer() {
+    if (!state.deadline) { state.deadline = Date.now() + 90 * 60 * 1000; store.set(state); }
+    const el = document.getElementById('timer');
+    const step = () => {
+      const left = Math.max(0, state.deadline - Date.now());
+      const m = Math.floor(left / 60000), s = Math.floor((left % 60000) / 1000);
+      el.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+      el.classList.toggle('low', left < 10 * 60 * 1000);
+      if (left === 0) { clearInterval(tick); submit(true); }
+    };
+    step(); tick = setInterval(step, 1000);
+  }
+
+  function same(a, b) { return a.length === b.length && a.every(x => b.includes(x)); }
+
+  function submit(auto) {
+    if (!auto && !confirm('Submit the exam? You can still read the answers afterwards.')) return;
+    clearInterval(tick);
+    state.submitted = true; store.set(state);
+    let total = 0, right = 0, wrong = 0, blank = 0;
+    exam.mcq.forEach((q, qi) => {
+      const ch = state.chosen[qi];
+      let mark;
+      if (!ch.length) { mark = 0; blank++; }
+      else if (same(ch, q.answer)) { mark = 4; right++; }
+      else { mark = -1; wrong++; }
+      total += mark;
+      const box = document.getElementById('q' + qi);
+      box.querySelectorAll('input').forEach(i => i.disabled = true);
+      box.querySelectorAll('.opt').forEach(l => {
+        const oi = +l.dataset.o;
+        if (q.answer.includes(oi)) l.classList.add('correct');
+        else if (ch.includes(oi)) l.classList.add('wrong');
+      });
+      const cls = mark > 0 ? 'pos' : mark < 0 ? 'neg' : 'zero';
+      box.querySelector('.fb').innerHTML = `<div class="why"><span class="mark ${cls}">${mark > 0 ? '+' : ''}${mark}</span> · ${esc(q.why)}</div>`;
+    });
+
+    document.querySelectorAll('textarea').forEach(t => t.readOnly = true);
+    exam.subjective.forEach((s, si) => {
+      const fb = document.querySelectorAll('.sfb')[si];
+      fb.innerHTML = `<div class="model"><strong>Model answer</strong><ul>${s.model.map(m => `<li>${esc(m)}</li>`).join('')}</ul>
+        <strong>Rubric</strong><ul>${s.rubric.map(r => `<li>${esc(r)}</li>`).join('')}</ul>
+        Your marks for this question (0–15): <input class="self" type="number" min="0" max="15" step="0.5" data-self="${si}" value="0"></div>`;
+    });
+
+    const res = document.getElementById('result');
+    res.classList.remove('hidden');
+    const draw = () => {
+      const selfMarks = [...document.querySelectorAll('[data-self]')].reduce((a, i) => a + Math.min(15, Math.max(0, +i.value || 0)), 0);
+      const grand = total + selfMarks;
+      res.innerHTML = `<div class="score-box">
+        <div class="big">${grand} / 150</div>
+        <div>Objective: <strong>${total} / 120</strong> (${right} right, ${wrong} wrong, ${blank} blank) · Subjective (your marks): <strong>${selfMarks} / 30</strong></div>
+        <div>That's <strong>${(grand / 150 * 100).toFixed(1)}%</strong>, or <strong>${(grand / 150 * 10).toFixed(2)}</strong> of the 10% weightage.</div>
+        <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+          <a class="btn ghost" href="#mcq">Review answers</a>
+          <button class="btn ghost" id="retake">Retake (new shuffle)</button>
+          <a class="btn ghost" href="index.html">Home</a></div></div>`;
+      document.getElementById('retake').onclick = () => { store.clear(); location.reload(); };
+    };
+    document.getElementById('subj').addEventListener('input', e => { if (e.target.dataset.self !== undefined) draw(); });
+    draw();
+    document.getElementById('submitBtn').disabled = true;
+    document.querySelector('.wrap').insertBefore(res, document.getElementById('exam'));
+    res.scrollIntoView();
+  }
+
+  function begin() {
+    document.getElementById('start').classList.add('hidden');
+    document.getElementById('exam').classList.remove('hidden');
+    render();
+    if (state.submitted) { submit(true); return; }
+    startTimer();
+  }
+
+  document.getElementById('startBtn').onclick = begin;
+  document.getElementById('submitBtn').onclick = () => submit(false);
+  if (state.deadline || state.submitted) begin();
+})();
+</script>
+</body>
+</html>
